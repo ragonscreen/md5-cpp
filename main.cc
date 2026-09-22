@@ -21,7 +21,62 @@ constexpr std::array<uint32_t, 64> K{
     0x6FA87E4F, 0xFE2CE6E0, 0xA3014314, 0x4E0811A1, 0xF7537E82, 0xBD3AF235, 0x2AD7D2BB, 0xEB86D391,
 };
 
-uint64_t TOT_BYTE_CNT = 0;
+constexpr int BUF_SIZE     = 8192;
+constexpr int CHNK_SIZE    = 64;
+uint64_t      TOT_BYTE_CNT = 0;
+
+uint32_t A0 = 0x67452301;
+uint32_t B0 = 0xEFCDAB89;
+uint32_t C0 = 0x98BADCFE;
+uint32_t D0 = 0x10325476;
+
+void process_chunk(std::array<uint8_t, BUF_SIZE>& buf, int offset) {
+        std::cout << "Processing buf with offset " << offset << ".\n";
+
+        std::array<uint32_t, 16> M{};
+
+        for (int j = 0; j < 16; j++) {
+                uint32_t i = 4 * j + offset;
+                M[j] = (static_cast<uint32_t>(buf[i + 3]) << 24) |
+                       (static_cast<uint32_t>(buf[i + 2]) << 16) |
+                       (static_cast<uint32_t>(buf[i + 1]) << 8) | (static_cast<uint32_t>(buf[i]));
+        }
+
+        uint32_t A = A0;
+        uint32_t B = B0;
+        uint32_t C = C0;
+        uint32_t D = D0;
+
+        for (int i = 0; i < 64; i++) {
+                uint32_t F = 0;
+                uint32_t g = 0;
+
+                if (i < 16) {
+                        F = (B & C) | ((~B) & D);
+                        g = i;
+                } else if (i < 32) {
+                        F = (D & B) | ((~D) & C);
+                        g = (5 * i + 1) % 16;
+                } else if (i < 48) {
+                        F = B ^ C ^ D;
+                        g = (3 * i + 5) % 16;
+                } else {
+                        F = C ^ (B | (~D));
+                        g = (7 * i) % 16;
+                }
+
+                F  = F + A + K[i] + M[g];
+                A  = D;
+                D  = C;
+                C  = B;
+                B += (F << s[i]) | (F >> (32 - s[i]));
+        }
+
+        A0 += A;
+        B0 += B;
+        C0 += C;
+        D0 += D;
+}
 
 void process_file(const std::string& fname) {
         std::ifstream file(fname, std::ios::binary);
@@ -32,20 +87,56 @@ void process_file(const std::string& fname) {
                 return;
         }
 
-        constexpr int              buf_size = 8192;
-        std::array<char, buf_size> buf{};
+        std::array<uint8_t, BUF_SIZE> buf{};
+
+        int final_offset       = 0;
+        int bytes_in_final_buf = 0;
 
         while (true) {
-                file.read(buf.data(), buf_size);
+                file.read(reinterpret_cast<char*>(buf.data()), BUF_SIZE);
                 auto bytes_read  = static_cast<int>(file.gcount());
                 TOT_BYTE_CNT    += bytes_read;
 
                 std::cout << "Read " << bytes_read << " bytes from file.\n";
 
-                if (bytes_read == 0) break;
+                int offset = 0;
+
+                // process all except final chunk
+                for (; offset + CHNK_SIZE < bytes_read; offset += CHNK_SIZE)
+                        process_chunk(buf, offset);
+
+                // this is not the final buf, process final chunk as usual
+                if (bytes_read == BUF_SIZE) {
+                        process_chunk(buf, offset);
+                        continue;
+                }
+
+                // this is the final buf
+                final_offset       = offset;
+                bytes_in_final_buf = bytes_read - offset;
+                break;
         }
 
-        std::cout << "Total Bytes: " << TOT_BYTE_CNT << "\n";
+        // std::cout << "final_offset_1: " << final_offset << "\n";
+        // std::cout << "bytes_in_final_buf: " << bytes_in_final_buf << "\n";
+
+        // std::array<uint8_t, BUF_SIZE> final_buf{};
+
+        // for (int i = 0; i < bytes_in_final_buf; i++) final_buf[i] = buf[final_offset++];
+
+        // final_buf[bytes_in_final_buf] = 0x80;
+        // int marker                    = bytes_in_final_buf + 1;
+
+        // while (marker != CHNK_SIZE - 8) {
+        //         final_buf[marker++] = 0x00;
+
+        //         if (marker == CHNK_SIZE) {
+        //                 process_chunk(final_buf, 0);
+        //                 marker = 0;
+        //         }
+        // }
+
+        // std::cout << "Total Bytes: " << TOT_BYTE_CNT << "\n";
         file.close();
 }
 

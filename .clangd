@@ -7,6 +7,8 @@ Diagnostics:
                         - 'readability*'
                 Remove:
                         - 'cppcoreguidelines-avoid-magic-numbers'
+                        - 'cppcoreguidelines-pro-bounds-constant-array-index'
+                        - 'readability-math-missing-parentheses'
                         - 'readability-magic-numbers'
                         - 'readability-identifier-length'
                 CheckOptions:
