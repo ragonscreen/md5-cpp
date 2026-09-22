@@ -1,0 +1,13 @@
+Diagnostics:
+        ClangTidy:
+                Add:
+                        - 'performance*'
+                        - 'cppcoreguidelines*'
+                        - 'modernize*'
+                        - 'readability*'
+                Remove:
+                        - 'cppcoreguidelines-avoid-magic-numbers'
+                        - 'readability-magic-numbers'
+                        - 'readability-identifier-length'
+                CheckOptions:
+                        readability-braces-around-statements.ShortStatementLines: '3'
