@@ -1,11 +1,14 @@
 #include <array>
+#include <bit>
 #include <cstdint>
+#include <cstdlib>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <string>
 
+// constants used for processing each chunk
 constexpr std::array<uint32_t, 64> s{
     7,  12, 17, 22, 7,  12, 17, 22, 7,  12, 17, 22, 7,  12, 17, 22, 5,  9,  14, 20, 5,  9,
     14, 20, 5,  9,  14, 20, 5,  9,  14, 20, 4,  11, 16, 23, 4,  11, 16, 23, 4,  11, 16, 23,
@@ -23,10 +26,21 @@ constexpr std::array<uint32_t, 64> K{
     0x6FA87E4F, 0xFE2CE6E0, 0xA3014314, 0x4E0811A1, 0xF7537E82, 0xBD3AF235, 0x2AD7D2BB, 0xEB86D391,
 };
 
+constexpr std::array<uint32_t, 64> G = []() -> std::array<uint32_t, 64> {
+        std::array<uint32_t, 64> g{};
+
+        for (uint32_t i = 0; i < 16; i++) g[i] = i;
+        for (uint32_t i = 16; i < 32; i++) g[i] = (5 * i + 1) % 16;
+        for (uint32_t i = 32; i < 48; i++) g[i] = (3 * i + 5) % 16;
+        for (uint32_t i = 48; i < 64; i++) g[i] = (7 * i) % 16;
+
+        return g;
+}();
+
 constexpr int BUF_SIZE  = 8192;  // file read buffer size, must be at least `CHNK_SIZE`
 constexpr int CHNK_SIZE = 64;    // DO NOT CHANGE: MD5 operates on 64-byte (512-bit) chunks
 
-uint64_t TOT_BYTE_CNT = 0;
+uint64_t TOT_BYTE_CNT{};
 
 // state variables
 uint32_t A0 = 0x67452301;
@@ -52,28 +66,18 @@ void process_chunk(std::array<uint8_t, BUF_SIZE>& buf, int offset) {
 
 #pragma GCC unroll 64
         for (int i = 0; i < 64; i++) {
-                uint32_t F = 0;
-                uint32_t g = 0;
+                uint32_t F{};
 
-                if (i < 16) {
-                        F = (B & C) | (~B & D);
-                        g = i;
-                } else if (i < 32) {
-                        F = (B & D) | (C & ~D);
-                        g = (5 * i + 1) % 16;
-                } else if (i < 48) {
-                        F = B ^ C ^ D;
-                        g = (3 * i + 5) % 16;
-                } else {
-                        F = C ^ (B | ~D);
-                        g = (7 * i) % 16;
-                }
+                if (i < 16) F = (B & C) | (~B & D);
+                else if (i < 32) F = (B & D) | (C & ~D);
+                else if (i < 48) F = B ^ C ^ D;
+                else F = C ^ (B | ~D);
 
-                F  = F + A + K[i] + M[g];
+                F  = F + A + K[i] + M[G[i]];
                 A  = D;
                 D  = C;
                 C  = B;
-                B += (F << s[i]) | (F >> (32 - s[i]));
+                B += std::rotl(F, static_cast<int>(s[i]));
         }
 
         A0 += A;
@@ -93,8 +97,8 @@ auto process_input(const std::string& fname) -> int {
 
         std::array<uint8_t, BUF_SIZE> buf{};
 
-        int pad_start_idx = 0;
-        int offset        = 0;
+        int pad_start_idx{};
+        int offset{};
 
         while (true) {
                 file.read(reinterpret_cast<char*>(buf.data()), BUF_SIZE);
@@ -130,25 +134,25 @@ auto process_input(const std::string& fname) -> int {
         for (int i = 0; i < pad_start_idx; i++) buf[i] = buf[i + offset];
 
         buf[pad_start_idx++] = 0x80;
-        offset               = 0;
+        int pad_offset       = 0;
 
         while (pad_start_idx != CHNK_SIZE - 8) {
                 if (pad_start_idx == CHNK_SIZE) {
-                        process_chunk(buf, offset);
-                        offset        += CHNK_SIZE;
+                        process_chunk(buf, pad_offset);
+                        pad_offset    += CHNK_SIZE;
                         pad_start_idx  = 0;
                 }
 
-                buf[pad_start_idx + offset] = 0x00;
+                buf[pad_start_idx + pad_offset] = 0x00;
                 pad_start_idx++;
         }
 
         uint64_t bit_cnt = TOT_BYTE_CNT * 8;
 
         for (int i = 0; i < 8; i++)
-                buf[pad_start_idx + offset + i] = static_cast<uint8_t>(bit_cnt >> (8 * i));
+                buf[pad_start_idx + pad_offset + i] = static_cast<uint8_t>(bit_cnt >> (8 * i));
 
-        process_chunk(buf, offset);
+        process_chunk(buf, pad_offset);
 
         file.close();
 
