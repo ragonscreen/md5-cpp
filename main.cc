@@ -1,7 +1,9 @@
 #include <array>
 #include <cstdint>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <string>
 
 constexpr std::array<uint32_t, 64> s{
@@ -31,8 +33,6 @@ uint32_t C0 = 0x98BADCFE;
 uint32_t D0 = 0x10325476;
 
 void process_chunk(std::array<uint8_t, BUF_SIZE>& buf, int offset) {
-        std::cout << "Processing buf with offset " << offset << ".\n";
-
         std::array<uint32_t, 16> M{};
 
         for (int j = 0; j < 16; j++) {
@@ -78,31 +78,29 @@ void process_chunk(std::array<uint8_t, BUF_SIZE>& buf, int offset) {
         D0 += D;
 }
 
-void process_file(const std::string& fname) {
+auto process_file(const std::string& fname) -> int {
         std::ifstream file(fname, std::ios::binary);
 
         if (!file) {
-                std::cerr << "Error: Unable to open file: \"" << fname << "\"\n";
+                std::cerr << "Error: Unable to open file \"" << fname << "\".\n";
 
-                return;
+                return 1;
         }
 
         std::array<uint8_t, BUF_SIZE> buf{};
 
-        int final_offset       = 0;
-        int bytes_in_final_buf = 0;
+        int final_offset  = 0;
+        int pad_start_idx = 0;
 
         while (true) {
                 file.read(reinterpret_cast<char*>(buf.data()), BUF_SIZE);
                 auto bytes_read  = static_cast<int>(file.gcount());
                 TOT_BYTE_CNT    += bytes_read;
 
-                std::cout << "Read " << bytes_read << " bytes from file.\n";
-
                 int offset = 0;
 
                 // process all except final chunk
-                for (; offset + CHNK_SIZE < bytes_read; offset += CHNK_SIZE)
+                for (; offset < bytes_read - CHNK_SIZE; offset += CHNK_SIZE)
                         process_chunk(buf, offset);
 
                 // this is not the final buf, process final chunk as usual
@@ -112,32 +110,67 @@ void process_file(const std::string& fname) {
                 }
 
                 // this is the final buf
-                final_offset       = offset;
-                bytes_in_final_buf = bytes_read - offset;
+                pad_start_idx = bytes_read - offset;
+                final_offset  = offset;
+
+                if (pad_start_idx == CHNK_SIZE) {
+                        process_chunk(buf, offset);
+                        pad_start_idx = 0;
+                }
+
                 break;
         }
 
-        // std::cout << "final_offset_1: " << final_offset << "\n";
-        // std::cout << "bytes_in_final_buf: " << bytes_in_final_buf << "\n";
+        // move bytes remaining to front of buffer for simpler processing
+        for (int i = 0; i < pad_start_idx; i++) buf[i] = buf[i + final_offset];
 
-        // std::array<uint8_t, BUF_SIZE> final_buf{};
+        buf[pad_start_idx++] = 0x80;
+        int pad_offset       = 0;
 
-        // for (int i = 0; i < bytes_in_final_buf; i++) final_buf[i] = buf[final_offset++];
+        while (pad_start_idx != CHNK_SIZE - 8) {
+                if (pad_start_idx == CHNK_SIZE) {
+                        process_chunk(buf, pad_offset);
+                        pad_offset    += CHNK_SIZE;
+                        pad_start_idx  = 0;
+                }
 
-        // final_buf[bytes_in_final_buf] = 0x80;
-        // int marker                    = bytes_in_final_buf + 1;
+                buf[pad_start_idx + pad_offset] = 0x00;
+                pad_start_idx++;
+        }
 
-        // while (marker != CHNK_SIZE - 8) {
-        //         final_buf[marker++] = 0x00;
+        uint64_t bit_cnt = TOT_BYTE_CNT * 8;
 
-        //         if (marker == CHNK_SIZE) {
-        //                 process_chunk(final_buf, 0);
-        //                 marker = 0;
-        //         }
-        // }
+        for (int i = 0; i < 8; i++) {
+                auto byte                           = static_cast<uint8_t>(bit_cnt >> (8 * i));
+                buf[pad_start_idx + pad_offset + i] = byte;
+        }
 
-        // std::cout << "Total Bytes: " << TOT_BYTE_CNT << "\n";
+        process_chunk(buf, pad_offset);
+
         file.close();
+
+        return 0;
+}
+
+void process_output() {
+        std::array<uint8_t, 16> digest{};
+        std::array<uint32_t, 4> words{A0, B0, C0, D0};
+
+        for (int w = 0; w < 4; ++w) {
+                for (int i = 0, j = 4 * w; i < 4; i++) {
+                        digest[j + i] = static_cast<uint8_t>(words[w] >> (8 * i));
+                }
+        }
+
+        std::ostringstream oss;
+
+        for (auto b : digest) {
+                oss << std::hex << std::setfill('0') << std::setw(2) << static_cast<int>(b);
+        }
+
+        std::string res = oss.str();
+
+        std::cout << res << "\n";
 }
 
 auto main(int argc, char** argv) -> int {
@@ -147,9 +180,10 @@ auto main(int argc, char** argv) -> int {
                 return 1;
         }
 
-        std::string fname = argv[1];
+        std::string fname  = argv[1];
+        int         retval = process_file(fname);
 
-        process_file(fname);
+        if (retval == 0) process_output();
 
-        return 0;
+        return retval;
 }
