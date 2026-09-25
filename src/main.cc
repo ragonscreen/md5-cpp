@@ -29,18 +29,20 @@ constexpr std::array<uint32_t, 64> K{
 constexpr std::array<uint32_t, 64> G = []() -> std::array<uint32_t, 64> {
         std::array<uint32_t, 64> g{};
 
-        for (uint32_t i = 0; i < 16; i++) g[i] = i;
-        for (uint32_t i = 16; i < 32; i++) g[i] = (5 * i + 1) % 16;
-        for (uint32_t i = 32; i < 48; i++) g[i] = (3 * i + 5) % 16;
-        for (uint32_t i = 48; i < 64; i++) g[i] = (7 * i) % 16;
+        for (uint32_t i = 0; i < 64; i++) {
+                if (i < 16) g[i] = i;
+                else if (i < 32) g[i] = (5 * i + 1) % 16;
+                else if (i < 48) g[i] = (3 * i + 5) % 16;
+                else g[i] = (7 * i) % 16;
+        }
 
         return g;
 }();
 
-constexpr int BUF_SIZE  = 8192;  // file read buffer size, must be at least `CHNK_SIZE`
-constexpr int CHNK_SIZE = 64;    // DO NOT CHANGE: MD5 operates on 64-byte (512-bit) chunks
+constexpr int CHUNK_SIZE_BYTES = 64;      // DO NOT CHANGE: MD5 operates on 64-byte (512-bit) chunks
+constexpr int BUF_SIZE_BYTES   = 32'768;  // file read buffer size, must be at least 64
 
-uint64_t TOT_BYTE_CNT{};
+uint64_t FILE_SIZE_BYTES{};
 
 // state variables
 uint32_t A0 = 0x67452301;
@@ -48,11 +50,11 @@ uint32_t B0 = 0xEFCDAB89;
 uint32_t C0 = 0x98BADCFE;
 uint32_t D0 = 0x10325476;
 
-void process_chunk(std::array<uint8_t, BUF_SIZE>& buf, int offset) {
+void process_chunk(std::array<uint8_t, BUF_SIZE_BYTES>& buf, int offset) {
         std::array<uint32_t, 16> M{};
 
 #pragma GCC unroll 16
-        for (int j = 0; j < 16; j++) {
+        for (uint32_t j = 0; j < 16; j++) {
                 uint32_t i = 4 * j + offset;
                 M[j] = (static_cast<uint32_t>(buf[i + 3]) << 24) |
                        (static_cast<uint32_t>(buf[i + 2]) << 16) |
@@ -73,7 +75,7 @@ void process_chunk(std::array<uint8_t, BUF_SIZE>& buf, int offset) {
                 else if (i < 48) F = B ^ C ^ D;
                 else F = C ^ (B | ~D);
 
-                F  = F + A + K[i] + M[G[i]];
+                F += A + K[i] + M[G[i]];
                 A  = D;
                 D  = C;
                 C  = B;
@@ -86,33 +88,33 @@ void process_chunk(std::array<uint8_t, BUF_SIZE>& buf, int offset) {
         D0 += D;
 }
 
-auto process_input(const std::string& fname) -> int {
-        std::ifstream file(fname, std::ios::binary);
+auto process_input(const std::string& file_name) -> int {
+        std::ifstream file(file_name, std::ios::binary);
 
         if (!file) {
-                std::cerr << "Error: Unable to open file \"" << fname << "\".\n";
+                std::cerr << "Error: Unable to open file \"" << file_name << "\".\n";
 
                 return 1;
         }
 
-        std::array<uint8_t, BUF_SIZE> buf{};
+        std::array<uint8_t, BUF_SIZE_BYTES> buf{};
 
         int pad_start_idx{};
         int offset{};
 
         while (true) {
-                file.read(reinterpret_cast<char*>(buf.data()), BUF_SIZE);
+                file.read(reinterpret_cast<char*>(buf.data()), BUF_SIZE_BYTES);
                 auto bytes_read  = static_cast<int>(file.gcount());
-                TOT_BYTE_CNT    += bytes_read;
+                FILE_SIZE_BYTES += bytes_read;
 
                 offset = 0;
 
                 // process all except final chunk
-                for (; offset < bytes_read - CHNK_SIZE; offset += CHNK_SIZE)
+                for (; offset < bytes_read - CHUNK_SIZE_BYTES; offset += CHUNK_SIZE_BYTES)
                         process_chunk(buf, offset);
 
                 // this is not the final buf, process final chunk as usual
-                if (bytes_read == BUF_SIZE) {
+                if (bytes_read == BUF_SIZE_BYTES) {
                         process_chunk(buf, offset);
                         continue;
                 }
@@ -122,7 +124,7 @@ auto process_input(const std::string& fname) -> int {
                 pad_start_idx = bytes_read - offset;
 
                 // we have a full chunk to process before padding
-                if (pad_start_idx == CHNK_SIZE) {
+                if (pad_start_idx == CHUNK_SIZE_BYTES) {
                         process_chunk(buf, offset);
                         pad_start_idx = 0;
                 }
@@ -136,10 +138,10 @@ auto process_input(const std::string& fname) -> int {
         buf[pad_start_idx++] = 0x80;
         int pad_offset       = 0;
 
-        while (pad_start_idx != CHNK_SIZE - 8) {
-                if (pad_start_idx == CHNK_SIZE) {
+        while (pad_start_idx != CHUNK_SIZE_BYTES - 8) {
+                if (pad_start_idx == CHUNK_SIZE_BYTES) {
                         process_chunk(buf, pad_offset);
-                        pad_offset    += CHNK_SIZE;
+                        pad_offset    += CHUNK_SIZE_BYTES;
                         pad_start_idx  = 0;
                 }
 
@@ -147,10 +149,11 @@ auto process_input(const std::string& fname) -> int {
                 pad_start_idx++;
         }
 
-        uint64_t bit_cnt = TOT_BYTE_CNT * 8;
+        uint64_t file_size_bits = FILE_SIZE_BYTES * 8;
 
         for (int i = 0; i < 8; i++)
-                buf[pad_start_idx + pad_offset + i] = static_cast<uint8_t>(bit_cnt >> (8 * i));
+                buf[pad_start_idx + pad_offset + i] =
+                    static_cast<uint8_t>(file_size_bits >> (8 * i));
 
         process_chunk(buf, pad_offset);
 
@@ -159,7 +162,7 @@ auto process_input(const std::string& fname) -> int {
         return 0;
 }
 
-void process_output() {
+auto get_output() -> std::string {
         std::array<uint8_t, 16> digest{};
         std::array<uint32_t, 4> words{A0, B0, C0, D0};
 
@@ -172,9 +175,7 @@ void process_output() {
 
         for (auto b : digest) oss << std::setw(2) << static_cast<int>(b);
 
-        std::string res = oss.str();
-
-        std::cout << res << "\n";
+        return oss.str();
 }
 
 auto main(int argc, char** argv) -> int {
@@ -184,10 +185,10 @@ auto main(int argc, char** argv) -> int {
                 return 1;
         }
 
-        std::string fname  = argv[1];
-        int         retval = process_input(fname);
+        std::string file_name = argv[1];
+        int         retval    = process_input(file_name);
 
-        if (retval == 0) process_output();
+        if (retval == 0) std::cout << get_output() << "\n";
 
         return retval;
 }
