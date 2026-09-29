@@ -8,8 +8,8 @@
 #include <sstream>
 #include <string>
 
-// constants used for processing each chunk
-constexpr std::array<uint32_t, 64> s{
+// constants used while processing each chunk
+constexpr std::array<int, 64> s{
     7,  12, 17, 22, 7,  12, 17, 22, 7,  12, 17, 22, 7,  12, 17, 22, 5,  9,  14, 20, 5,  9,
     14, 20, 5,  9,  14, 20, 5,  9,  14, 20, 4,  11, 16, 23, 4,  11, 16, 23, 4,  11, 16, 23,
     4,  11, 16, 23, 6,  10, 15, 21, 6,  10, 15, 21, 6,  10, 15, 21, 6,  10, 15, 21,
@@ -42,15 +42,13 @@ constexpr std::array<uint32_t, 64> G = []() -> std::array<uint32_t, 64> {
 constexpr int CHUNK_SIZE_BYTES = 64;      // DO NOT CHANGE: MD5 operates on 64-byte (512-bit) chunks
 constexpr int BUF_SIZE_BYTES   = 32'768;  // file read buffer size, must be at least 64
 
+using BUF = std::array<uint8_t, BUF_SIZE_BYTES>;
+
 uint64_t FILE_SIZE_BYTES{};
 
-// state variables
-uint32_t A0 = 0x67452301;
-uint32_t B0 = 0xEFCDAB89;
-uint32_t C0 = 0x98BADCFE;
-uint32_t D0 = 0x10325476;
+std::array<uint32_t, 4> H = {0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476};  // state
 
-void process_chunk(std::array<uint8_t, BUF_SIZE_BYTES>& buf, int offset) {
+void process_chunk(const BUF& buf, const int offset) {
         std::array<uint32_t, 16> M{};
 
 #pragma GCC unroll 16
@@ -61,10 +59,10 @@ void process_chunk(std::array<uint8_t, BUF_SIZE_BYTES>& buf, int offset) {
                        (static_cast<uint32_t>(buf[i + 1]) << 8) | (static_cast<uint32_t>(buf[i]));
         }
 
-        uint32_t A = A0;
-        uint32_t B = B0;
-        uint32_t C = C0;
-        uint32_t D = D0;
+        uint32_t A = H[0];
+        uint32_t B = H[1];
+        uint32_t C = H[2];
+        uint32_t D = H[3];
 
 #pragma GCC unroll 64
         for (int i = 0; i < 64; i++) {
@@ -79,13 +77,13 @@ void process_chunk(std::array<uint8_t, BUF_SIZE_BYTES>& buf, int offset) {
                 A  = D;
                 D  = C;
                 C  = B;
-                B += std::rotl(F, static_cast<int>(s[i]));
+                B += std::rotl(F, s[i]);
         }
 
-        A0 += A;
-        B0 += B;
-        C0 += C;
-        D0 += D;
+        H[0] += A;
+        H[1] += B;
+        H[2] += C;
+        H[3] += D;
 }
 
 auto process_input(const std::string& file_name) -> int {
@@ -97,7 +95,7 @@ auto process_input(const std::string& file_name) -> int {
                 return 1;
         }
 
-        std::array<uint8_t, BUF_SIZE_BYTES> buf{};
+        BUF buf{};
 
         int pad_start_idx{};
         int offset{};
@@ -151,9 +149,9 @@ auto process_input(const std::string& file_name) -> int {
 
         uint64_t file_size_bits = FILE_SIZE_BYTES * 8;
 
-        for (int i = 0; i < 8; i++)
-                buf[pad_start_idx + pad_offset + i] =
-                    static_cast<uint8_t>(file_size_bits >> (8 * i));
+#pragma GCC unroll 8
+        for (int i = 0, s = 0; i < 8; i++, s += 8)
+                buf[pad_start_idx + pad_offset + i] = static_cast<uint8_t>(file_size_bits >> s);
 
         process_chunk(buf, pad_offset);
 
@@ -163,17 +161,12 @@ auto process_input(const std::string& file_name) -> int {
 }
 
 auto get_output() -> std::string {
-        std::array<uint8_t, 16> digest{};
-        std::array<uint32_t, 4> words{A0, B0, C0, D0};
-
-        for (int w = 0; w < 4; ++w)
-                for (int i = 0, j = 4 * w; i < 4; i++)
-                        digest[j + i] = static_cast<uint8_t>(words[w] >> (8 * i));
-
         std::ostringstream oss;
         oss << std::hex << std::setfill('0');
 
-        for (auto b : digest) oss << std::setw(2) << static_cast<int>(b);
+        for (const auto& w : H)
+                for (int s = 0; s < 32; s += 8)
+                        oss << std::setw(2) << static_cast<int>(static_cast<uint8_t>(w >> s));
 
         return oss.str();
 }
